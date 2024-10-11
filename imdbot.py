@@ -2,11 +2,9 @@ from uuid import uuid4
 from datetime import datetime, timedelta
 from telegram import InlineQueryResultArticle, InputTextMessageContent, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.constants import ParseMode
-from telegram.ext import Updater, InlineQueryHandler, CommandHandler, CallbackQueryHandler, ChosenInlineResultHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, InlineQueryHandler, CallbackQueryHandler, ChosenInlineResultHandler, MessageHandler, filters
 import asyncio
 import movie
-import logging
-from logging.handlers import RotatingFileHandler
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -15,18 +13,9 @@ TOKEN = os.getenv('TOKEN')
 
 # Global vars
 DATABASE = os.path.join(os.path.dirname(__file__), 'database', 'imdbot_db.sqlite3')
-LOG_FILE = os.path.join(os.getcwd(), 'imdbot.log')
 JOB_TIME = (9, 30)  # time at which notifications are sent (UTC)
 
-# Setup log file and rotation handler
-LOG_ROTATE = logging.handlers.RotatingFileHandler(LOG_FILE, mode='a', maxBytes=5242880, backupCount=3, delay=False)
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[LOG_ROTATE])
-
-# Disable info level logging from below module as it spams
-logging.getLogger('imdb.parser.http.piculet').setLevel(logging.ERROR)
-
-LOG = logging.getLogger(__name__)
 
 def notify_users(context):
     """
@@ -50,7 +39,7 @@ async def help_cmd(update, context):
     """
     Reply with help message when the command /help is issued.
     """
-    bot_name = context.bot.getMe().username
+    bot_name = (await context.bot.get_me()).username
     await update.message.reply_text(text='Search for a title by typing @{0} "movie name", pick a result from the list and set an alert to receive a notification when the movie or series episode is out!\n\nType /alerts to view your active alerts.'.format(bot_name))
 
 async def alerts_cmd(update, context):
@@ -134,7 +123,7 @@ def create_reply_markup(title, current_year, user_titles):
     Create reply markup for result based on title and user alerts
     """
     keyboard = [[InlineKeyboardButton("Enable alert", callback_data=str(enable_alert)),
-                 InlineKeyboardButton("Disable alert", callback_data=str(disable_alert)),
+                 InlineKeyboardButton("Disable alert", callback_data=str(disable_alert )),
                  InlineKeyboardButton("Dismiss", callback_data=str(dismiss))]]
     if 'series' in title['kind']:
         if title['end_year']:
@@ -176,35 +165,17 @@ async def in_line_query(update, context):
             results.append(result)
         await update.inline_query.answer(results, cache_time=4)
 
-def log_error(update, context):
-    """
-    Log Errors caused by Updates.
-    """
-    LOG.error('Update "%s" caused error: "%s"', update, context.error)
-
-async def main():
-    """
-    Create the updater and dispatcher handlers
-    """
-    movie.Alert(DATABASE).create_db()
-    bot = Bot(TOKEN)
-    updater = Updater(bot)
-    job_start_time = datetime.time(datetime.now().replace(hour=int(JOB_TIME[0]), minute=int(JOB_TIME[1])))
-    job = updater.job_queue
-    job.run_repeating(notify_users, interval=86400, first=job_start_time)
-    dispatch = updater.dispatcher
-    dispatch.add_handler(CommandHandler("start", help_cmd))
-    dispatch.add_handler(CommandHandler("help", help_cmd))
-    dispatch.add_handler(CommandHandler("alerts", alerts_cmd))
-    dispatch.add_handler(InlineQueryHandler(in_line_query))
-    dispatch.add_handler(ChosenInlineResultHandler(chosen_result))
-    dispatch.add_handler(CallbackQueryHandler(enable_alert, pattern='^'+str(enable_alert)+'$'))
-    dispatch.add_handler(CallbackQueryHandler(disable_alert, pattern='^'+str(disable_alert)+'$'))
-    dispatch.add_handler(CallbackQueryHandler(dismiss, pattern='^'+str(dismiss)+'$'))
-    dispatch.add_handler(MessageHandler((~ filters.entity('url')) & (~ filters.entity('text_link')), unknown_cmd))
-    dispatch.add_error_handler(log_error)
-    await updater.run_polling()
-    await updater.stop()
-
 if __name__ == '__main__':
-    asyncio.run(main())
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", help_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("alerts", alerts_cmd))
+    application.add_handler(InlineQueryHandler(in_line_query))
+    application.add_handler(ChosenInlineResultHandler(chosen_result))
+    application.add_handler(CallbackQueryHandler(enable_alert, pattern='^enable_alert$'))
+    application.add_handler(CallbackQueryHandler(disable_alert, pattern='^disable_alert$'))
+    application.add_handler(CallbackQueryHandler(dismiss, pattern='^dismiss$'))
+    application.add_handler(MessageHandler((~ filters.Entity('url')) & (~ filters.Entity('text_link')), unknown_cmd))
+
+    application.run_polling()
