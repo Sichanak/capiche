@@ -2,10 +2,12 @@ import os
 import logging
 from uuid import uuid4
 from datetime import datetime
-from telegram import InlineQueryResultArticle, InputTextMessageContent, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, Updater, InlineQueryHandler, CommandHandler, CallbackQueryHandler, ChosenInlineResultHandler, MessageHandler, filters
+from telegram.ext import Application, Updater, InlineQueryHandler, CommandHandler, CallbackQueryHandler, ChosenInlineResultHandler, MessageHandler, filters, ContextTypes
 import movie
+from movie import ia
+import hashlib
 from dotenv import load_dotenv
 
 
@@ -204,43 +206,48 @@ def create_reply_markup(title, current_year, user_titles):
     reply_markup = InlineKeyboardMarkup(keyboard)
     return reply_markup
 
-async def in_line_query(update, context):
-    """
-    Handle the inline query.
-    """
-
-    if update.inline_query.id is None or update.inline_query.from_user.id is None:
-        return
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
-    is_bot = update.inline_query.from_user.is_bot
-    if not is_bot:
 
-        current_year = int(datetime.now().strftime('%Y'))
+    if not query:
+        return
 
-        # get user's alert title IDs
-        user_id = update.inline_query.from_user.id
-        user_titles = movie.Alert(DATABASE).title_id(user_id)
+    # Search IMDb for the query
+    search_results = ia.search_movie(query)
+    results = []
+    
+    for movie in search_results:  # Limit to top 5 results
+        title = movie.get('title', 'N/A')
+        year = movie.get('year', 'N/A')
+        imdb_id = movie.movieID
 
-        # search IMDb for titles
-        titles = movie.search(query)
-        results = []
+        # Get the movie data
+        movie_data = ia.get_movie(imdb_id)
+        genres = ', '.join(movie_data.get('genres', ['N/A']))
+        plot = movie_data.get('plot', ['N/A'])[0]  # Get the first plot summary
+        rating = movie_data.get('rating', 'N/A')
+        cast = ', '.join([p['name'] for p in movie_data.get('cast', [])])
+        cover_url = movie_data.get('full-size cover url', "https://via.placeholder.com/300x450?text=No+Image")
 
-        for title in titles:
+        # Create a unique result ID using hashlib
+        result_id = hashlib.md5(imdb_id.encode()).hexdigest()
 
-            reply_markup = create_reply_markup(title, current_year, user_titles)
+        # Use InlineQueryResultArticle for results with thumbnails
+        result = InlineQueryResultArticle(
+            id=result_id,
+            title=f"{title} ({year})",
+            description=f"IMDb ID: {imdb_id}",
+            input_message_content=InputTextMessageContent(
+                message_text=f"🎬 *{title}* ({year})\nIMDb ID: {imdb_id}\n\nGenres: {genres}\nPlot: {plot}\nRating: {rating}\nCast: {cast}",
+                parse_mode="Markdown"
+            ),
+            thumbnail_url=cover_url  # Use thumb_url for the thumbnail image
+        )
+        results.append(result)
 
-            result = InlineQueryResultArticle(id=result_id(title['id']),
-                                              title=title['long imdb title'],
-                                              input_message_content=InputTextMessageContent(
-                                                  message_text=movie.reply_message(title),
-                                                  parse_mode=ParseMode.HTML),
-                                              description=title['plot'],
-                                              thumbnail_url=title['cover url'],
-                                              reply_markup=reply_markup)
-            results.append(result)
-
-        await update.inline_query.answer(results, cache_time=4)
-
+    # Send the results back to the user
+    await update.inline_query.answer(results, cache_time=1)
+    
 
 def log_error(update, context):
     """
@@ -277,7 +284,7 @@ def main():
     app.add_handler(CommandHandler("alerts", alerts_cmd))
 
     # Add the inline query handler
-    app.add_handler(InlineQueryHandler(in_line_query))
+    app.add_handler(InlineQueryHandler(inline_query))
 
     # On chosing result, get its ID
     app.add_handler(ChosenInlineResultHandler(chosen_result))
