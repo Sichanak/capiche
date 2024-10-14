@@ -184,7 +184,13 @@ def create_reply_markup(title, current_year, user_titles):
 
     # Check if movie was released
     if 'year' in title:
-        if current_year > title['year']:
+        try:
+            title_year = int(title['year'])
+        except ValueError:
+            # Handle the case where title['year'] is not a valid integer
+            title_year = None
+
+        if title_year is not None and current_year > title_year:
             message = 'Movie released in {0}'.format(title['year'])
             reply_markup = imdb_url_button(title['id'], message)
             return reply_markup
@@ -198,12 +204,13 @@ def create_reply_markup(title, current_year, user_titles):
     reply_markup = InlineKeyboardMarkup(keyboard)
     return reply_markup
 
-
 async def in_line_query(update, context):
     """
     Handle the inline query.
     """
 
+    if update.inline_query.id is None or update.inline_query.from_user.id is None:
+        return
     query = update.inline_query.query
     is_bot = update.inline_query.from_user.is_bot
     if not is_bot:

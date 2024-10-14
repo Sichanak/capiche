@@ -62,6 +62,7 @@ class Database():
                              title_release TIMESTAMP)''')
         return True
 
+        self.con.commit()
 
     @_catch_and_log
     def query_title_name(self, user_id):
